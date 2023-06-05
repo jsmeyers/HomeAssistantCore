@@ -22,12 +22,8 @@ from google_nest_sdm.exceptions import (
 import voluptuous as vol
 
 from homeassistant.auth.permissions.const import POLICY_READ
-from homeassistant.components.application_credentials import (
-    ClientCredential,
-    async_import_client_credential,
-)
 from homeassistant.components.camera import Image, img_util
-from homeassistant.components.http.const import KEY_HASS_USER
+from homeassistant.components.http import KEY_HASS_USER
 from homeassistant.components.http.view import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -64,8 +60,6 @@ from .const import (
     DATA_SDM,
     DATA_SUBSCRIBER,
     DOMAIN,
-    INSTALLED_AUTH_DOMAIN,
-    WEB_AUTH_DOMAIN,
 )
 from .events import EVENT_NAME_MAP, NEST_EVENT
 from .legacy import async_setup_legacy, async_setup_legacy_entry
@@ -123,9 +117,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if DOMAIN not in config:
         return True  # ConfigMode.SDM_APPLICATION_CREDENTIALS
 
-    # Note that configuration.yaml deprecation warnings are handled in the
-    # config entry since we don't know what type of credentials we have and
-    # whether or not they can be imported.
     hass.data[DOMAIN][DATA_NEST_CONFIG] = config[DOMAIN]
 
     config_mode = config_flow.get_config_mode(hass)
@@ -180,9 +171,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if DATA_SDM not in entry.data or config_mode == config_flow.ConfigMode.LEGACY:
         return await async_setup_legacy_entry(hass, entry)
 
-    if config_mode == config_flow.ConfigMode.SDM:
-        await async_import_config(hass, entry)
-    elif entry.unique_id != entry.data[CONF_PROJECT_ID]:
+    if entry.unique_id != entry.data[CONF_PROJECT_ID]:
         hass.config_entries.async_update_entry(
             entry, unique_id=entry.data[CONF_PROJECT_ID]
         )
@@ -232,54 +221,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_import_config(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Attempt to import configuration.yaml settings."""
-    config = hass.data[DOMAIN][DATA_NEST_CONFIG]
-    new_data = {
-        CONF_PROJECT_ID: config[CONF_PROJECT_ID],
-        **entry.data,
-    }
-    if CONF_SUBSCRIBER_ID not in entry.data:
-        if CONF_SUBSCRIBER_ID not in config:
-            raise ValueError("Configuration option 'subscriber_id' missing")
-        new_data.update(
-            {
-                CONF_SUBSCRIBER_ID: config[CONF_SUBSCRIBER_ID],
-                CONF_SUBSCRIBER_ID_IMPORTED: True,  # Don't delete user managed subscriber
-            }
-        )
-    hass.config_entries.async_update_entry(
-        entry, data=new_data, unique_id=new_data[CONF_PROJECT_ID]
-    )
-
-    if entry.data["auth_implementation"] == INSTALLED_AUTH_DOMAIN:
-        # App Auth credentials have been deprecated and must be re-created
-        # by the user in the config flow
-        raise ConfigEntryAuthFailed(
-            "Google has deprecated App Auth credentials, and the integration "
-            "must be reconfigured in the UI to restore access to Nest Devices."
-        )
-
-    if entry.data["auth_implementation"] == WEB_AUTH_DOMAIN:
-        await async_import_client_credential(
-            hass,
-            DOMAIN,
-            ClientCredential(
-                config[CONF_CLIENT_ID],
-                config[CONF_CLIENT_SECRET],
-            ),
-            WEB_AUTH_DOMAIN,
-        )
-
-    _LOGGER.warning(
-        "Configuration of Nest integration in YAML is deprecated and "
-        "will be removed in a future release; Your existing configuration "
-        "(including OAuth Application Credentials) has been imported into "
-        "the UI automatically and can be safely removed from your "
-        "configuration.yaml file"
-    )
-
-
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if DATA_SDM not in entry.data:
@@ -312,7 +253,10 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await subscriber.delete_subscription()
     except (AuthException, SubscriberException) as err:
         _LOGGER.warning(
-            "Unable to delete subscription '%s'; Will be automatically cleaned up by cloud console: %s",
+            (
+                "Unable to delete subscription '%s'; Will be automatically cleaned up"
+                " by cloud console: %s"
+            ),
             subscriber.subscriber_id,
             err,
         )

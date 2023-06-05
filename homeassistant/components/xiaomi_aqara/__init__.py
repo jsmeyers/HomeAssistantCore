@@ -1,12 +1,14 @@
 """Support for Xiaomi Gateways."""
+import asyncio
 from datetime import timedelta
 import logging
+from typing import Any
 
 import voluptuous as vol
-from xiaomi_gateway import XiaomiGateway, XiaomiGatewayDiscovery
+from xiaomi_gateway import AsyncXiaomiGatewayMulticast, XiaomiGateway
 
 from homeassistant.components import persistent_notification
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_BATTERY_LEVEL,
     ATTR_DEVICE_ID,
@@ -34,6 +36,8 @@ from .const import (
     DEFAULT_DISCOVERY_RETRY,
     DOMAIN,
     GATEWAYS_KEY,
+    KEY_SETUP_LOCK,
+    KEY_UNSUB_STOP,
     LISTENER_KEY,
 )
 
@@ -75,6 +79,8 @@ SERVICE_SCHEMA_REMOVE_DEVICE = vol.Schema(
     {vol.Required(ATTR_DEVICE_ID): vol.All(cv.string, vol.Length(min=14, max=14))}
 )
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 
 def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Xiaomi component."""
@@ -102,8 +108,10 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
         gateway.write_to_hub(gateway.sid, join_permission="yes")
         persistent_notification.async_create(
             hass,
-            "Join permission enabled for 30 seconds! "
-            "Please press the pairing button of the new device once.",
+            (
+                "Join permission enabled for 30 seconds! "
+                "Please press the pairing button of the new device once."
+            ),
             title="Xiaomi Aqara Gateway",
         )
 
@@ -143,6 +151,7 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the xiaomi aqara components from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+    setup_lock = hass.data[DOMAIN].setdefault(KEY_SETUP_LOCK, asyncio.Lock())
     hass.data[DOMAIN].setdefault(GATEWAYS_KEY, {})
 
     # Connect to Xiaomi Aqara Gateway
@@ -158,24 +167,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     hass.data[DOMAIN][GATEWAYS_KEY][entry.entry_id] = xiaomi_gateway
 
-    gateway_discovery = hass.data[DOMAIN].setdefault(
-        LISTENER_KEY,
-        XiaomiGatewayDiscovery(hass.add_job, [], entry.data[CONF_INTERFACE]),
-    )
+    async with setup_lock:
+        if LISTENER_KEY not in hass.data[DOMAIN]:
+            multicast = AsyncXiaomiGatewayMulticast(
+                interface=entry.data[CONF_INTERFACE]
+            )
+            hass.data[DOMAIN][LISTENER_KEY] = multicast
 
-    if len(hass.data[DOMAIN][GATEWAYS_KEY]) == 1:
-        # start listining for local pushes (only once)
-        await hass.async_add_executor_job(gateway_discovery.listen)
+            # start listining for local pushes (only once)
+            await multicast.start_listen()
 
-        # register stop callback to shutdown listining for local pushes
-        def stop_xiaomi(event):
-            """Stop Xiaomi Socket."""
-            _LOGGER.debug("Shutting down Xiaomi Gateway Listener")
-            gateway_discovery.stop_listen()
+            # register stop callback to shutdown listining for local pushes
+            @callback
+            def stop_xiaomi(event):
+                """Stop Xiaomi Socket."""
+                _LOGGER.debug("Shutting down Xiaomi Gateway Listener")
+                multicast.stop_listen()
 
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop_xiaomi)
+            unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop_xiaomi)
+            hass.data[DOMAIN][KEY_UNSUB_STOP] = unsub
 
-    gateway_discovery.gateways[entry.data[CONF_HOST]] = xiaomi_gateway
+    multicast = hass.data[DOMAIN][LISTENER_KEY]
+    multicast.register_gateway(entry.data[CONF_HOST], xiaomi_gateway.multicast_callback)
     _LOGGER.debug(
         "Gateway with host '%s' connected, listening for broadcasts",
         entry.data[CONF_HOST],
@@ -201,29 +214,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    if entry.data[CONF_KEY] is not None:
+    if config_entry.data[CONF_KEY] is not None:
         platforms = GATEWAY_PLATFORMS
     else:
         platforms = GATEWAY_PLATFORMS_NO_KEY
 
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
+    unload_ok = await hass.config_entries.async_unload_platforms(
+        config_entry, platforms
+    )
     if unload_ok:
-        hass.data[DOMAIN][GATEWAYS_KEY].pop(entry.entry_id)
+        hass.data[DOMAIN][GATEWAYS_KEY].pop(config_entry.entry_id)
 
-    if len(hass.data[DOMAIN][GATEWAYS_KEY]) == 0:
+    loaded_entries = [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.state == ConfigEntryState.LOADED
+    ]
+    if len(loaded_entries) == 1:
         # No gateways left, stop Xiaomi socket
+        unsub_stop = hass.data[DOMAIN].pop(KEY_UNSUB_STOP)
+        unsub_stop()
         hass.data[DOMAIN].pop(GATEWAYS_KEY)
         _LOGGER.debug("Shutting down Xiaomi Gateway Listener")
-        gateway_discovery = hass.data[DOMAIN].pop(LISTENER_KEY)
-        await hass.async_add_executor_job(gateway_discovery.stop_listen)
+        multicast = hass.data[DOMAIN].pop(LISTENER_KEY)
+        multicast.stop_listen()
 
     return unload_ok
 
 
 class XiaomiDevice(Entity):
     """Representation a base Xiaomi device."""
+
+    _attr_should_poll = False
 
     def __init__(self, device, device_type, xiaomi_hub, config_entry):
         """Initialize the Xiaomi device."""
@@ -260,12 +284,9 @@ class XiaomiDevice(Entity):
             self._is_gateway = False
             self._device_id = self._sid
 
-    def _add_push_data_job(self, *args):
-        self.hass.add_job(self.push_data, *args)
-
     async def async_added_to_hass(self):
         """Start unavailability tracking."""
-        self._xiaomi_hub.callbacks[self._sid].append(self._add_push_data_job)
+        self._xiaomi_hub.callbacks[self._sid].append(self.push_data)
         self._async_track_unavailable()
 
     @property
@@ -310,11 +331,6 @@ class XiaomiDevice(Entity):
         return self._is_available
 
     @property
-    def should_poll(self):
-        """Return the polling state. No polling needed."""
-        return False
-
-    @property
     def extra_state_attributes(self):
         """Return the state attributes."""
         return self._extra_state_attributes
@@ -338,9 +354,13 @@ class XiaomiDevice(Entity):
             return True
         return False
 
+    def push_data(self, data: dict[str, Any], raw_data: dict[Any, Any]) -> None:
+        """Push from Hub running in another thread."""
+        self.hass.loop.call_soon_threadsafe(self.async_push_data, data, raw_data)
+
     @callback
-    def push_data(self, data, raw_data):
-        """Push from Hub."""
+    def async_push_data(self, data: dict[str, Any], raw_data: dict[Any, Any]) -> None:
+        """Push from Hub handled in the event loop."""
         _LOGGER.debug("PUSH >> %s: %s", self, data)
         was_unavailable = self._async_track_unavailable()
         is_data = self.parse_data(data, raw_data)

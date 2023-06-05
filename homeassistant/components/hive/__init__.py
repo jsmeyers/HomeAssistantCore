@@ -4,12 +4,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Coroutine
 from functools import wraps
 import logging
-from typing import Any, TypeVar
+from typing import Any, Concatenate, ParamSpec, TypeVar
 
 from aiohttp.web_exceptions import HTTPException
 from apyhiveapi import Auth, Hive
 from apyhiveapi.helper.hive_exceptions import HiveReauthRequired
-from typing_extensions import Concatenate, ParamSpec
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -18,6 +17,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client, config_validation as cv
+from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
     async_dispatcher_send,
@@ -123,6 +123,13 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
 
 
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: DeviceEntry
+) -> bool:
+    """Remove a config entry from a device."""
+    return True
+
+
 def refresh_system(
     func: Callable[Concatenate[_HiveEntityT, _P], Awaitable[Any]]
 ) -> Callable[Concatenate[_HiveEntityT, _P], Coroutine[Any, Any, None]]:
@@ -139,7 +146,7 @@ def refresh_system(
 class HiveEntity(Entity):
     """Initiate Hive Base Class."""
 
-    def __init__(self, hive, hive_device):
+    def __init__(self, hive: Hive, hive_device: dict[str, Any]) -> None:
         """Initialize the instance."""
         self.hive = hive
         self.device = hive_device
@@ -153,9 +160,9 @@ class HiveEntity(Entity):
             sw_version=self.device["deviceData"]["version"],
             via_device=(DOMAIN, self.device["parentDevice"]),
         )
-        self.attributes = {}
+        self.attributes: dict[str, Any] = {}
 
-    async def async_added_to_hass(self):
+    async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
         self.async_on_remove(
             async_dispatcher_connect(self.hass, DOMAIN, self.async_write_ha_state)

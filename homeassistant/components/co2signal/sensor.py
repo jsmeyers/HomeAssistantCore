@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ATTRIBUTION, PERCENTAGE
+from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
@@ -35,13 +35,13 @@ class CO2SensorEntityDescription(SensorEntityDescription):
 SENSORS = (
     CO2SensorEntityDescription(
         key="carbonIntensity",
-        name="CO2 intensity",
+        translation_key="carbon_intensity",
         unique_id="co2intensity",
         # No unit, it's extracted from response.
     ),
     CO2SensorEntityDescription(
         key="fossilFuelPercentage",
-        name="Grid fossil fuel percentage",
+        translation_key="fossil_fuel_percentage",
         native_unit_of_measurement=PERCENTAGE,
     ),
 )
@@ -59,6 +59,7 @@ class CO2Sensor(CoordinatorEntity[CO2SignalCoordinator], SensorEntity):
     """Implementation of the CO2Signal sensor."""
 
     entity_description: CO2SensorEntityDescription
+    _attr_attribution = ATTRIBUTION
     _attr_has_entity_name = True
     _attr_icon = "mdi:molecule-co2"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -72,7 +73,6 @@ class CO2Sensor(CoordinatorEntity[CO2SignalCoordinator], SensorEntity):
 
         self._attr_extra_state_attributes = {
             "country_code": coordinator.data["countryCode"],
-            ATTR_ATTRIBUTION: ATTRIBUTION,
         }
         self._attr_device_info = DeviceInfo(
             configuration_url="https://www.electricitymap.org/",
@@ -103,8 +103,8 @@ class CO2Sensor(CoordinatorEntity[CO2SignalCoordinator], SensorEntity):
     @property
     def native_unit_of_measurement(self) -> str | None:
         """Return the unit of measurement."""
-        if self.entity_description.unit_of_measurement:
-            return self.entity_description.unit_of_measurement
+        if self.entity_description.native_unit_of_measurement:
+            return self.entity_description.native_unit_of_measurement
         return cast(
             str, self.coordinator.data["units"].get(self.entity_description.key)
         )

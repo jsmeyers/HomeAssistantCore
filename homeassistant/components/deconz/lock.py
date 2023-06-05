@@ -50,11 +50,10 @@ async def async_setup_entry(
     )
 
 
-class DeconzLock(DeconzDevice, LockEntity):
+class DeconzLock(DeconzDevice[DoorLock | Lock], LockEntity):
     """Representation of a deCONZ lock."""
 
     TYPE = DOMAIN
-    _device: DoorLock | Lock
 
     @property
     def is_locked(self) -> bool:

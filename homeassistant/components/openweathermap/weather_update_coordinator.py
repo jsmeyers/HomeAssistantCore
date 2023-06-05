@@ -9,10 +9,11 @@ from homeassistant.components.weather import (
     ATTR_CONDITION_CLEAR_NIGHT,
     ATTR_CONDITION_SUNNY,
 )
+from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers import sun
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.util import dt
-from homeassistant.util.temperature import kelvin_to_celsius
+from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
     ATTR_API_CLOUDS,
@@ -158,7 +159,7 @@ class WeatherUpdateCoordinator(DataUpdateCoordinator):
     def _convert_forecast(self, entry):
         """Convert the forecast data."""
         forecast = {
-            ATTR_API_FORECAST_TIME: dt.utc_from_timestamp(
+            ATTR_API_FORECAST_TIME: dt_util.utc_from_timestamp(
                 entry.reference_time("unix")
             ).isoformat(),
             ATTR_API_FORECAST_PRECIPITATION: self._calc_precipitation(
@@ -191,7 +192,12 @@ class WeatherUpdateCoordinator(DataUpdateCoordinator):
     def _fmt_dewpoint(dewpoint):
         """Format the dewpoint data."""
         if dewpoint is not None:
-            return round(kelvin_to_celsius(dewpoint), 1)
+            return round(
+                TemperatureConverter.convert(
+                    dewpoint, UnitOfTemperature.KELVIN, UnitOfTemperature.CELSIUS
+                ),
+                1,
+            )
         return None
 
     @staticmethod
@@ -245,9 +251,8 @@ class WeatherUpdateCoordinator(DataUpdateCoordinator):
     def _get_condition(self, weather_code, timestamp=None):
         """Get weather condition from weather data."""
         if weather_code == WEATHER_CODE_SUNNY_OR_CLEAR_NIGHT:
-
             if timestamp:
-                timestamp = dt.utc_from_timestamp(timestamp)
+                timestamp = dt_util.utc_from_timestamp(timestamp)
 
             if sun.is_up(self.hass, timestamp):
                 return ATTR_CONDITION_SUNNY

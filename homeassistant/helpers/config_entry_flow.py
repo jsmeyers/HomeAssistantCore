@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 import logging
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from homeassistant import config_entries
 from homeassistant.components import onboarding
@@ -15,11 +15,11 @@ from .typing import DiscoveryInfoType
 if TYPE_CHECKING:
     import asyncio
 
+    from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
     from homeassistant.components.dhcp import DhcpServiceInfo
     from homeassistant.components.ssdp import SsdpServiceInfo
     from homeassistant.components.zeroconf import ZeroconfServiceInfo
 
-    from .service_info.bluetooth import BluetoothServiceInfo
     from .service_info.mqtt import MqttServiceInfo
 
 _R = TypeVar("_R", bound="Awaitable[bool] | bool")
@@ -97,7 +97,7 @@ class DiscoveryFlowHandler(config_entries.ConfigFlow, Generic[_R]):
         return await self.async_step_confirm()
 
     async def async_step_bluetooth(
-        self, discovery_info: BluetoothServiceInfo
+        self, discovery_info: BluetoothServiceInfoBleak
     ) -> FlowResult:
         """Handle a flow initialized by bluetooth discovery."""
         if self._async_in_progress() or self._async_current_entries():
@@ -176,7 +176,7 @@ def register_discovery_flow(
 ) -> None:
     """Register flow for discovered integrations that not require auth."""
 
-    class DiscoveryFlow(DiscoveryFlowHandler[Union[Awaitable[bool], bool]]):
+    class DiscoveryFlow(DiscoveryFlowHandler[Awaitable[bool] | bool]):
         """Discovery flow handler."""
 
         def __init__(self) -> None:
